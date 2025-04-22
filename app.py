@@ -69,8 +69,14 @@ if price is None:
     st.error("No price data."); st.stop()
 
 # drop rows missing whatever columns actually exist
-req_cols  = [c for c in ["Adj Close","SMA_20","MACD","RSI"] if c in price.columns]
-price     = price.dropna(subset=req_cols)
+cols_wanted = ["Adj Close","SMA_20","MACD","RSI"]
+present     = [c for c in cols_wanted if c in price.columns]
+
+# If none of the indicators are present (very short timeframe), at least keep Adj Close
+if not present:
+    present = ["Adj Close"]
+
+price = price.dropna(subset=present)
 if price.empty:
     st.error("Not enough data for indicators."); st.stop()
 last = price.iloc[-1]
