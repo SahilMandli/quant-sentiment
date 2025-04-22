@@ -93,41 +93,51 @@ last = price.iloc[-1]
 # ─────────── FUNDAMENTALS ────────────────────────────────────────────
 @st.cache_data(ttl=86400)
 def fundamentals(tkr):
-    info = yf.Ticker(tkr).fast_info or {}
-    return dict(pe=info.get("trailingPe",np.nan),
-                de=info.get("debtToEquity",np.nan),
-                ev=info.get("evToEbitda",np.nan))
-fund = fundamentals(tkr)
+    """Return dict with P/E, Debt/Equity, EV/EBITDA or np.nan."""
+    ticker = yf.Ticker(tkr)
+    info   = ticker.fast_info or {}
+
+    pe = info.get("trailingPe", np.nan)
+    de = info.get("debtToEquity", np.nan)
+    ev = info.get("evToEbitda", np.nan)
+
+    # If any are missing, fall back to .info (slower but richer)
+    if np.isnan(pe) or np.isnan(de) or np.isnan(ev):
+        try:
+            full = ticker.info
+            pe = full.get("trailingPE", pe)
+            de = full.get("debtToEquity", de)
+            ev = full.get("enterpriseToEbitda", ev)
+        except Exception:
+            pass                       # ignore if Yahoo blocks frequent calls
+
+    return dict(pe=pe, de=de, ev=ev)
 
 # ─────────── REDDIT SENTIMENT ────────────────────────────────────────
 @st.cache_data(ttl=300)
 def reddit_sentiment(tkr):
+    """Fetch latest 50 posts via Pushshift only (no API keys needed)."""
+    url = (f"https://api.pushshift.io/reddit/search/submission/?q={tkr}"
+           "&subreddit=stocks,investing,wallstreetbets&sort=desc&size=50")
     try:
-        import praw
-        r = praw.Reddit(client_id=st.secrets["reddit"]["client_id"],
-                        client_secret=st.secrets["reddit"]["client_secret"],
-                        user_agent="QuantDash")
-        posts = r.subreddit("stocks+investing+wallstreetbets").search(tkr,limit=50,sort="new")
-        raw   = [{"title":p.title,"text":p.selftext or "","score":p.score} for p in posts]
+        data = requests.get(url, timeout=10).json().get("data", [])
     except Exception:
-        url=(f"https://api.pushshift.io/reddit/search/submission/?q={tkr}"
-             "&subreddit=stocks,investing,wallstreetbets&sort=desc&size=50")
-        raw=[{"title":d.get("title",""),"text":d.get("selftext",""),"score":d.get("score",0)}
-             for d in requests.get(url,timeout=10).json().get("data",[])]
-    if not raw:
-        return 0.0,"B",pd.DataFrame()
+        data = []
 
-    sia=SentimentIntensityAnalyzer()
-    def hybrid(p):
-        txt  = p["title"]+" "+p["text"]
-        base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"])/2
-        return base*min(p["score"],100)/100
+    if not data:
+        return 0.0, "B", pd.DataFrame()      # harmless defaults
 
-    avg = sum(hybrid(x) for x in raw)/len(raw)
+    sia = SentimentIntensityAnalyzer()
+    def hybrid(d):
+        txt = f"{d.get('title','')} {d.get('selftext','')}"
+        base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"]) / 2
+        weight = min(d.get("score",0), 100) / 100
+        return base * weight
+
+    avg = sum(hybrid(x) for x in data) / len(data)
     rating = "A" if avg>0.2 else "C" if avg<-0.2 else "B"
-    return avg,rating,pd.DataFrame(raw)
-
-sent_val,sent_rating,df_posts = reddit_sentiment(tkr)
+    df = pd.DataFrame([{"title":x.get("title",""), "score":x.get("score",0)} for x in data])
+    return avg, rating, df
 
 # ─────────── TECH + FUND SCORE ───────────────────────────────────────
 tech = 0.0
