@@ -3,6 +3,8 @@ import pandas as pd, numpy as np, plotly.graph_objects as go
 import yfinance as yf, datetime as dt, requests, base64, os
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+fund = fundamentals(tkr)
+
 
 # ──────────────────  PAGE CONFIG & STYLE  ────────────────────────────
 st.set_page_config("⚡️ Quant Sentiment", "📈", layout="wide")
@@ -140,19 +142,43 @@ def reddit_sentiment(tkr):
     return avg, rating, df
 
 # ─────────── TECH + FUND SCORE ───────────────────────────────────────
+# ─────────── TECH + FUND SCORE (clean syntax) ────────────────────────
 tech = 0.0
-if show_sma and "SMA_20" in last:  tech += 1 if last["Adj Close"]>last["SMA_20"] else -1
-if show_macd and "MACD" in last:   tech += 1 if last["MACD"]>0 else -1
-if show_rsi and "RSI" in last:     tech += 1 if 40<last["RSI"]<70 else -1
-if show_bb and {"BB_Upper","BB_Lower"}.issubset(last.index):
-    tech += 0.5 if last["Adj Close"]>last["BB_Upper"] else 0
-    tech -= 0.5 if last["Adj Close"]<last["BB_Lower"] else 0
-if show_pe and not np.isnan(fund["pe"]):       tech += 1   if fund["pe"]<18  else -1
-if show_de and not np.isnan(fund["de"]):       tech += 0.5 if fund["de"]<1   else -0.5
-if show_ev and not np.isnan(fund["ev"]):       tech += 1   if fund["ev"]<12  else -1
 
-blend = tech_w/100*tech + sent_w/100*sent_val
-ver,color = ("BUY","springgreen") if blend>2 else ("SELL","salmon") if blend<-2 else ("HOLD","khaki")
+# --- Technical indicators -------------------------------------------
+if show_sma and "SMA_20" in last:
+    tech += 1 if last["Adj Close"] > last["SMA_20"] else -1
+
+if show_macd and "MACD" in last:
+    tech += 1 if last["MACD"] > 0 else -1
+
+if show_rsi and "RSI" in last:
+    tech += 1 if 40 < last["RSI"] < 70 else -1
+
+if show_bb and {"BB_Upper","BB_Lower"}.issubset(last.index):
+    if last["Adj Close"] > last["BB_Upper"]:
+        tech += 0.5
+    elif last["Adj Close"] < last["BB_Lower"]:
+        tech -= 0.5
+
+# --- Fundamental ratios ---------------------------------------------
+if show_pe and not np.isnan(fund["pe"]):
+    if fund["pe"] < 18:
+        tech += 1
+    else:
+        tech -= 1
+
+if show_de and not np.isnan(fund["de"]):
+    if fund["de"] < 1:
+        tech += 0.5
+    else:
+        tech -= 0.5
+
+if show_ev and not np.isnan(fund["ev"]):
+    if fund["ev"] < 12:
+        tech += 1
+    else:
+        tech -= 1
 
 # ─────────── TABS ────────────────────────────────────────────────────
 tab_v,tab_ta,tab_f,tab_r = st.tabs(["🏁 Verdict","📈 Technical","📊 Fundamentals","🗣️ Reddit"])
