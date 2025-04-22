@@ -1,144 +1,197 @@
-import streamlit as st 
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-import yfinance as yf
-import base64
+import streamlit as st
+import pandas as pd, numpy as np, plotly.graph_objects as go
+import yfinance as yf, datetime as dt, requests, base64, os
+from textblob import TextBlob
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# ─── Must be first Streamlit command ─────────────
-st.set_page_config(
-    page_title="⚡️ Quant Sentiment Dashboard",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ──────────────────  PAGE CONFIG & STYLE  ────────────────────────────
+st.set_page_config("⚡️ Quant Sentiment", "📈", layout="wide")
+if os.path.exists("tron.png"):
+    bg64 = base64.b64encode(open("tron.png","rb").read()).decode()
+    st.markdown(f"""
+    <style>
+      body,.stApp{{background:
+        linear-gradient(rgba(0,0,0,.9),rgba(0,0,0,.9)),
+        url("data:image/png;base64,{bg64}") center/cover fixed;
+        color:#fff;font-family:Arial}}
+      h1{{color:#0ff;text-align:center;text-shadow:0 0 6px #0ff}}
+      .stSidebar{{background:rgba(0,0,30,.93);border-right:2px solid #0ff}}
+    </style>""", unsafe_allow_html=True)
 
-# ─── Background: TRON PNG & Styles ───────────────
-with open("tron.png", "rb") as img:
-    b64 = base64.b64encode(img.read()).decode()
+st.markdown("<h1>⚡️ Quant Sentiment Dashboard</h1>", unsafe_allow_html=True)
 
-st.markdown(f"""
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
-<style>
-  body, .stApp {{
-    background: linear-gradient(rgba(0,0,0,0.85), rgba(0,0,0,0.85)),
-                url("data:image/png;base64,{b64}") no-repeat center center fixed;
-    background-size: cover;
-    font-family: 'Orbitron', sans-serif;
-    color: #FFF;
-    margin: 0; padding: 0;
-  }}
-  header, footer {{ visibility: hidden; }}
-  h1 {{ font-size:2.5rem; color:#0ff; text-align:center; text-shadow:0 0 4px #0ff; margin-bottom:0.5rem; }}
-  .stSidebar {{ background: rgba(0,0,20,0.9); border-right:2px solid #0ff; }}
-  h2 {{ font-size:1.8rem; color:#ff0; border-bottom:2px solid #0ff; padding-bottom:4px; margin-top:1.5rem; text-shadow:0 0 4px #ff0; }}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("<h1>⚡️ Quant Sentiment Dashboard</h1>", unsafe_allow_html=True)
-
-# ─── Sidebar ──────────────────────────────────────
+# ─────────────────────  SIDEBAR  ─────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🔧 Configuration")
-    timeframe = st.selectbox("Timeframe", ["1W","1M","6M","YTD","1Y","Custom"])
-    if timeframe != "Custom":
-        today = pd.Timestamp.today().date()
-        if timeframe == "1W": dmin = today - pd.Timedelta(days=7)
-        elif timeframe == "1M": dmin = today - pd.Timedelta(days=30)
-        elif timeframe == "6M": dmin = today - pd.Timedelta(days=180)
-        elif timeframe == "YTD": dmin = pd.Timestamp(today.year,1,1).date()
-        else: dmin = today - pd.Timedelta(days=365)
-        dmax = today
-    else:
-        dmin, dmax = st.date_input("Custom date range", [pd.Timestamp.today().date()-pd.Timedelta(days=180), pd.Timestamp.today().date()])
-    st.markdown("---")
-    st.markdown("### Display Indicators")
-    show_sma  = st.checkbox("SMA20", True)
+    st.header("Configuration")
+    tf  = st.selectbox("Timeframe", ["1W","1M","6M","YTD","1Y"], index=1)
+    tkr = st.text_input("Ticker", "NVDA").strip().upper()
+    tech_w = st.slider("Technical Weight %", 0, 100, 60)
+    sent_w = 100 - tech_w
+
+    # technical factors
+    show_sma  = st.checkbox("SMA‑20", True)
     show_macd = st.checkbox("MACD", True)
     show_rsi  = st.checkbox("RSI", True)
-    show_bb   = st.checkbox("Bollinger", True)
+    show_bb   = st.checkbox("Bollinger Bands", True)
+
     st.markdown("---")
-    ta_pct = st.slider("Technical Weight (%)", 0, 100, 60, 5)
-    sa_pct = 100 - ta_pct
-    stock = st.selectbox("Select Ticker", ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR"])
-    st.markdown(f"**Blend:** {ta_pct}% Tech + {sa_pct}% Sentiment")
-    st.markdown("> Data via **YFinance**, **AlphaVantage**, **PushShift**")
+    # fundamental factors
+    show_pe = st.checkbox("P/E ratio", True)
+    show_de = st.checkbox("Debt / Equity", True)
+    show_ev = st.checkbox("EV / EBITDA", True)
 
-# ─── Load Data ─────────────────────────────────────
-sent_df  = pd.read_csv("reddit_sentiments.csv")
-tech_raw = pd.read_csv("technical_indicators.csv", header=[0,1], index_col=0, parse_dates=True)
-blend    = pd.read_csv("final_recommendations.csv", index_col=0)
-fund_df  = pd.read_csv("fundamentals.csv", index_col="ticker")
+    run = st.button("🚀 Analyze")
 
-# ─── Data Access ───────────────────────────────────
-def series(tkr, col):
-    df = tech_raw[tkr][col]
-    return df.loc[dmin:dmax]
+if not run or not tkr:
+    st.stop()
 
+# ─────────── DATE RANGE ──────────────────────────────────────────────
+today = dt.date.today()
+start = dt.date(today.year,1,1) if tf=="YTD" else today - dt.timedelta(
+        days={"1W":7,"1M":30,"6M":180,"1Y":365}[tf])
+
+# ─────────── PRICE +  INDICATORS  ────────────────────────────────────
+@st.cache_data(ttl=900)
+def load_price(tkr, start, end):
+    raw = yf.download(tkr, start=start, end=end+dt.timedelta(days=1),
+                      progress=False, group_by="ticker")
+
+    # ── flatten MultiIndex if present ─────────────────
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw = raw.xs(tkr, level=0, axis=1)
+
+    if raw.empty:
+        return None
+
+    df = raw.copy()
+    # ensure “Adj Close”
+    if "Adj Close" not in df.columns:
+        df["Adj Close"] = df["Close"]
+
+    # indicators
+    df["SMA_20"]    = df["Adj Close"].rolling(20).mean()
+    df["MACD"]      = df["Adj Close"].ewm(12).mean() - df["Adj Close"].ewm(26).mean()
+    delta           = df["Adj Close"].diff()
+    rs              = (delta.clip(lower=0).rolling(14).mean() /
+                       (-delta.clip(upper=0).rolling(14).mean()).replace(0,np.nan))
+    df["RSI"]       = 100 - 100/(1+rs)
+    std             = df["Adj Close"].rolling(20).std()
+    df["BB_Upper"]  = df["SMA_20"] + 2*std
+    df["BB_Lower"]  = df["SMA_20"] - 2*std
+    return df
+
+price = load_price(tkr, start, today)
+if price is None:
+    st.error("No price data."); st.stop()
+
+# drop rows missing Adj Close only (column always exists now)
+price = price.dropna(subset=["Adj Close"])
+if price.empty:
+    st.error("No usable rows for selected period."); st.stop()
+last = price.iloc[-1]
+
+# ─────────── FUNDAMENTALS ────────────────────────────────────────────
+@st.cache_data(ttl=86400)
+def fundamentals(tkr):
+    info = yf.Ticker(tkr).fast_info or {}
+    return dict(pe=info.get("trailingPe",np.nan),
+                de=info.get("debtToEquity",np.nan),
+                ev=info.get("evToEbitda",np.nan))
+fund = fundamentals(tkr)
+
+# ─────────── REDDIT SENTIMENT ────────────────────────────────────────
 @st.cache_data(ttl=300)
-def fetch_intraday(tkr):
-    with st.spinner("Fetching intraday data…"):
-        today = pd.Timestamp.today().date()
-        return yf.download(tkr, start=today, end=today+pd.Timedelta(days=1), interval="5m", progress=False)
+def reddit_sentiment(tkr):
+    try:
+        import praw
+        r = praw.Reddit(client_id=st.secrets["reddit"]["client_id"],
+                        client_secret=st.secrets["reddit"]["client_secret"],
+                        user_agent="QuantDash")
+        posts = r.subreddit("stocks+investing+wallstreetbets").search(tkr,limit=50,sort="new")
+        raw   = [{"title":p.title,"text":p.selftext or "","score":p.score} for p in posts]
+    except Exception:
+        url=(f"https://api.pushshift.io/reddit/search/submission/?q={tkr}"
+             "&subreddit=stocks,investing,wallstreetbets&sort=desc&size=50")
+        raw=[{"title":d.get("title",""),"text":d.get("selftext",""),"score":d.get("score",0)}
+             for d in requests.get(url,timeout=10).json().get("data",[])]
+    if not raw:
+        return 0.0,"B",pd.DataFrame()
 
-# ─── Tabs ──────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["🏁 Verdict","🔧 Tech Breakdown","📊 Fundamentals & Pulse"])
+    sia=SentimentIntensityAnalyzer()
+    def hybrid(p):
+        txt  = p["title"]+" "+p["text"]
+        base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"])/2
+        return base*min(p["score"],100)/100
 
-def show_verdict():
-    st.markdown("<h2>Overall Investment Verdict</h2>", unsafe_allow_html=True)
-    verdict = blend.at[stock,"verdict"]
-    color = {"BUY":"#0ff","HOLD":"#ff0","SELL":"#f0f"}[verdict]
-    st.markdown(f"<h1 style='color:{color}'>{verdict}</h1>", unsafe_allow_html=True)
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Tech Score", blend.at[stock,"technical_score"] )
-    c2.metric("Sentiment", round(blend.at[stock,"sentiment_score"],2) )
-    c3.metric("Blended", round(blend.at[stock,"blended_score"],2) )
-    st.caption(f"BUY > +2, SELL < –2 | Blend {ta_pct}% / {sa_pct}%")
-    st.download_button("Download Verdict CSV", blend.loc[[stock]].to_csv().encode(), f"{stock}_verdict.csv")
+    avg = sum(hybrid(x) for x in raw)/len(raw)
+    rating = "A" if avg>0.2 else "C" if avg<-0.2 else "B"
+    return avg,rating,pd.DataFrame(raw)
 
-def show_tech():
-    st.markdown("<h2>Technical Indicators Breakdown</h2>", unsafe_allow_html=True)
-    price = series(stock,"close"); fig = go.Figure(layout=dict(template='plotly_dark', height=300))
-    fig.add_trace(go.Scatter(x=price.index,y=price,name="Price",line=dict(color="#0ff")))
-    if show_sma:
-        sma=series(stock,"SMA20")
-        fig.add_trace(go.Scatter(x=sma.index,y=sma,name="SMA20",line=dict(color="#f0f",dash='dash')))
-    if show_bb:
-        up=series(stock,"BB_upper"); lo=series(stock,"BB_lower")
-        fig.add_trace(go.Scatter(x=up.index,y=up,name="BB Upper",line=dict(color="#08f",dash='dot')))
-        fig.add_trace(go.Scatter(x=lo.index,y=lo,name="BB Lower",line=dict(color="#08f",dash='dot')))
-    fig.update_traces(hovertemplate="%{y:.2f} @ %{x|%Y-%m-%d}<extra></extra>")
+sent_val,sent_rating,df_posts = reddit_sentiment(tkr)
+
+# ─────────── TECH + FUND SCORE ───────────────────────────────────────
+tech = 0.0
+if show_sma and "SMA_20" in last:  tech += 1 if last["Adj Close"]>last["SMA_20"] else -1
+if show_macd and "MACD" in last:   tech += 1 if last["MACD"]>0 else -1
+if show_rsi and "RSI" in last:     tech += 1 if 40<last["RSI"]<70 else -1
+if show_bb and {"BB_Upper","BB_Lower"}.issubset(last.index):
+    tech += 0.5 if last["Adj Close"]>last["BB_Upper"] else 0
+    tech -= 0.5 if last["Adj Close"]<last["BB_Lower"] else 0
+if show_pe and not np.isnan(fund["pe"]):       tech += 1   if fund["pe"]<18  else -1
+if show_de and not np.isnan(fund["de"]):       tech += 0.5 if fund["de"]<1   else -0.5
+if show_ev and not np.isnan(fund["ev"]):       tech += 1   if fund["ev"]<12  else -1
+
+blend = tech_w/100*tech + sent_w/100*sent_val
+ver,color = ("BUY","springgreen") if blend>2 else ("SELL","salmon") if blend<-2 else ("HOLD","khaki")
+
+# ─────────── TABS ────────────────────────────────────────────────────
+tab_v,tab_ta,tab_f,tab_r = st.tabs(["🏁 Verdict","📈 Technical","📊 Fundamentals","🗣️ Reddit"])
+
+with tab_v:
+    st.header("Overall Verdict")
+    st.markdown(f"<h1 style='color:{color};text-align:center'>{ver}</h1>",unsafe_allow_html=True)
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Tech Score",f"{tech:.2f}")
+    c2.metric("Sent Rating",sent_rating)
+    c3.metric("Sent Score",f"{sent_val:.2f}")
+    c4.metric("Blended",f"{blend:.2f}")
+    st.caption(f"{tech_w}% Tech + {sent_w}% Sentiment")
+
+with tab_ta:
+    df = price.loc[start:today]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index,y=df["Adj Close"],name="Price",line=dict(color="#0ff")))
+    if show_sma and "SMA_20" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index,y=df["SMA_20"],name="SMA‑20",
+                                 line=dict(color="#ff0",dash="dash")))
+    if show_bb and {"BB_Upper","BB_Lower"}.issubset(df.columns):
+        fig.add_trace(go.Scatter(x=df.index,y=df["BB_Upper"],name="Upper BB",
+                                 line=dict(color="#0f0",dash="dot")))
+        fig.add_trace(go.Scatter(x=df.index,y=df["BB_Lower"],name="Lower BB",
+                                 line=dict(color="#0f0",dash="dot")))
+    fig.update_layout(template="plotly_dark",height=350,title="Price / SMA / Bollinger")
     st.plotly_chart(fig,use_container_width=True)
-    if show_macd:
-        macd=series(stock,"MACD")
-        st.markdown("#### MACD")
-        fig2=px.line(macd,template="plotly_dark"); fig2.update_traces(hovertemplate="%{y:.2f} @ %{x}<extra></extra>")
-        st.plotly_chart(fig2,use_container_width=True)
-    if show_rsi:
-        rsi=series(stock,"RSI")
-        st.markdown("#### RSI")
-        fig3=px.line(rsi,template="plotly_dark"); fig3.update_traces(hovertemplate="%{y:.1f} @ %{x}<extra></extra>")
-        st.plotly_chart(fig3,use_container_width=True)
+    if show_macd and "MACD" in df.columns:
+        st.line_chart(df["MACD"],height=200)
+    if show_rsi and "RSI" in df.columns:
+        st.line_chart(df["RSI"],height=200)
 
-def show_fund():
-    st.markdown("<h2>Fundamental Metrics & Community Pulse</h2>", unsafe_allow_html=True)
-    if stock in fund_df.index:
-        m=fund_df.loc[stock,["pe","de_ratio","ev_ebitda"]]
-        m.index=["P/E","D/E","EV/EBITDA"]
-        dfm=m.reset_index().rename(columns={"index":"Metric",stock:"Value"})
-        fig4=px.bar(dfm,x="Metric",y="Value",text="Value",template="plotly_dark")
-        st.plotly_chart(fig4,use_container_width=True)
-        st.markdown("*Lower values suggest potential undervaluation.*")
-    posts=sent_df[sent_df["ticker"]==stock]
-    st.markdown("#### Community Pulse (Reddit)")
-    if not posts.empty:
-        st.dataframe(posts["title"].head(10),use_container_width=True)
-    else: st.info("No recent Reddit mentions found.")
+    st.subheader("Candlestick")
+    candle = go.Figure(data=[go.Candlestick(
+        x=df.index,open=df["Open"],high=df["High"],low=df["Low"],close=df["Close"],
+        increasing_line_color="#0ff",decreasing_line_color="#f44")])
+    candle.update_layout(template="plotly_dark",height=420,xaxis_rangeslider_visible=False)
+    st.plotly_chart(candle,use_container_width=True)
 
-# Run all
-with tab1: show_verdict()
-with tab2: show_tech()
-with tab3: show_fund()
+with tab_f:
+    st.header("Key Ratios")
+    st.table(pd.DataFrame({
+        "Metric":["P/E","Debt / Equity","EV / EBITDA"],
+        "Value":[fund["pe"],fund["de"],fund["ev"]]}).set_index("Metric"))
 
-
+with tab_r:
+    st.header("Latest Reddit Mentions")
+    if df_posts.empty:
+        st.info("No recent posts.")
+    else:
+        st.dataframe(df_posts[["title","score"]].head(20),use_container_width=True)
