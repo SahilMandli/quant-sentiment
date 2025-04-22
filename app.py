@@ -78,17 +78,11 @@ if price is None:
 
 # ─────── SAFELY DROP NA FOR SELECTED INDICATORS ────────────────────────
 # always require Adj Close
-present = ["Adj Close"]
-if show_sma  and "SMA_20" in price.columns: present.append("SMA_20")
-if show_macd and "MACD"  in price.columns: present.append("MACD")
-if show_rsi  and "RSI"   in price.columns: present.append("RSI")
-# (we do not drop on Bollinger bands themselves)
-
-price = price.dropna(subset=present)
+# ─────── DROP ONLY ON Adj Close TO AVOID KEYERROR ────────────────────────
+price = price.dropna(subset=["Adj Close"])
 if price.empty:
-    st.error("Not enough data to compute selected indicators.")
+    st.error("No adjusted‐close data available.")
     st.stop()
-
 last = price.iloc[-1]
 
 # ───────────────────── FETCH FUNDAMENTALS ─────────────────────────────
