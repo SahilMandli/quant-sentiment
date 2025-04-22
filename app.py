@@ -58,7 +58,8 @@ def load_price(tkr,start,end):
 price = load_price(tkr, start, today)
 if price is None:
     st.error("No price data."); st.stop()
-last = price.dropna().iloc[-1]
+price = price.dropna(subset=["Adj Close", "SMA_20", "MACD", "RSI"])
+last = price.iloc[-1]
 @st.cache_data(ttl=300)
 def reddit_sentiment(tkr):
     try:
