@@ -120,38 +120,50 @@ fund = fundamentals(tkr)
 # ─────────── REDDIT SENTIMENT (Pushshift only) ───────────────────────
 @st.cache_data(ttl=300)
 def reddit_sentiment(tkr):
-    url = (
-        f"https://api.pushshift.io/reddit/search/submission/?q={tkr}"
-        "&subreddit=stocks,investing,wallstreetbets&sort=desc&size=50"
-    )
-    try:
-        data = requests.get(url, timeout=10).json().get("data", [])
-    except Exception:
-        data = []
+    """
+    Fetch latest 60 submissions mentioning the ticker via Reddit’s own
+    JSON search (no auth needed).  Returns avg‑sentiment, A/B/C rating,
+    and DataFrame of titles & scores.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (QuantDash)"}
+    subs    = ["stocks", "investing", "wallstreetbets"]
+    rows    = []
 
-    if not data:
+    for sub in subs:
+        url = (
+            f"https://www.reddit.com/r/{sub}/search.json"
+            f"?q={tkr}&restrict_sr=1&sort=new&limit=20"
+        )
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            for child in r.json().get("data", {}).get("children", []):
+                d = child["data"]
+                rows.append(
+                    {
+                        "title": d.get("title", ""),
+                        "text": d.get("selftext", ""),
+                        "score": d.get("score", 0),
+                    }
+                )
+        except Exception:
+            pass  # ignore sub‑level errors
+
+    if not rows:
         return 0.0, "B", pd.DataFrame()
 
     sia = SentimentIntensityAnalyzer()
 
-    def hybrid(d):
-        txt = f"{d.get('title','')} {d.get('selftext','')}"
-        base = (
-            TextBlob(txt).sentiment.polarity
-            + sia.polarity_scores(txt)["compound"]
-        ) / 2
-        weight = min(d.get("score", 0), 100) / 100
+    def hybrid(x):
+        txt = f"{x['title']} {x['text']}"
+        base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"]) / 2
+        weight = min(x["score"], 100) / 100
         return base * weight
 
-    avg = sum(hybrid(x) for x in data) / len(data)
+    avg = sum(hybrid(x) for x in rows) / len(rows)
     rating = "A" if avg > 0.2 else "C" if avg < -0.2 else "B"
-    df = pd.DataFrame(
-        [{"title": x.get("title", ""), "score": x.get("score", 0)} for x in data]
-    )
+    df = pd.DataFrame([{"title": x["title"], "score": x["score"]} for x in rows])
+
     return avg, rating, df
-
-
-sent_val, sent_rating, df_posts = reddit_sentiment(tkr)
 
 # ─────────── TECH + FUND SCORE ───────────────────────────────────────
 tech = 0.0
