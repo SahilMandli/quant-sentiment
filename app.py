@@ -121,47 +121,51 @@ fund = fundamentals(tkr)
 @st.cache_data(ttl=300)
 def reddit_sentiment(tkr):
     """
-    Fetch latest 60 submissions mentioning the ticker via Reddit’s own
-    JSON search (no auth needed).  Returns avg‑sentiment, A/B/C rating,
-    and DataFrame of titles & scores.
+    Grab up to 90 fresh posts (30 × 3 subreddits) straight from
+    api.reddit.com – no keys required.
+
+    Returns: avg-score, A/B/C rating, dataframe of titles & scores
     """
-    headers = {"User-Agent": "Mozilla/5.0 (QuantDash)"}
+    headers = {"User-Agent": "QuantDash/0.1"}
     subs    = ["stocks", "investing", "wallstreetbets"]
-    rows    = []
+    posts   = []
 
     for sub in subs:
         url = (
-            f"https://www.reddit.com/r/{sub}/search.json"
-            f"?q={tkr}&restrict_sr=1&sort=new&limit=20"
+            f"https://api.reddit.com/r/{sub}/search"
+            f"?q={tkr}&restrict_sr=true&sort=new&limit=30"
         )
         try:
-            r = requests.get(url, headers=headers, timeout=10)
-            for child in r.json().get("data", {}).get("children", []):
+            js = requests.get(url, headers=headers, timeout=10).json()
+            for child in js.get("data", {}).get("children", []):
                 d = child["data"]
-                rows.append(
+                posts.append(
                     {
-                        "title": d.get("title", ""),
-                        "text": d.get("selftext", ""),
-                        "score": d.get("score", 0),
+                        "title":  d.get("title", ""),
+                        "text":   d.get("selftext", ""),
+                        "score":  d.get("score", 0),
                     }
                 )
         except Exception:
-            pass  # ignore sub‑level errors
+            continue                # ignore this subreddit if request fails
 
-    if not rows:
-        return 0.0, "B", pd.DataFrame()
+    if not posts:
+        return 0.0, "B", pd.DataFrame()   # harmless defaults
 
     sia = SentimentIntensityAnalyzer()
 
-    def hybrid(x):
-        txt = f"{x['title']} {x['text']}"
-        base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"]) / 2
-        weight = min(x["score"], 100) / 100
+    def hybrid(row):
+        txt   = f"{row['title']} {row['text']}"
+        base  = (TextBlob(txt).sentiment.polarity +
+                 sia.polarity_scores(txt)["compound"]) / 2
+        weight = min(row["score"], 100) / 100
         return base * weight
 
-    avg = sum(hybrid(x) for x in rows) / len(rows)
+    avg    = sum(hybrid(p) for p in posts) / len(posts)
     rating = "A" if avg > 0.2 else "C" if avg < -0.2 else "B"
-    df = pd.DataFrame([{"title": x["title"], "score": x["score"]} for x in rows])
+    df     = pd.DataFrame(
+        [{"title": p["title"], "score": p["score"]} for p in posts]
+    )
 
     return avg, rating, df
 
