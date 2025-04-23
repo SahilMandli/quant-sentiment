@@ -182,9 +182,8 @@ else:           ver,clr = 'HOLD','khaki'
 # ─── 5 | UI TABS ───────────────────────────────────────────────────
 tab_v,tab_ta,tab_f,tab_r = st.tabs(["🏁 Verdict","📈 Technical","📊 Fundamentals","🗣️ Reddit"])
 with tab_v:
-    st.markdown(f"<h3 style='text-align:center'>{tkr} – {company_name}</h3>", unsafe_allow_html=True)
-
-    st.markdown(f"<h2 style='color:{clr};text-align:center'>{ver}</h2>", unsafe_allow_html=True)
+with tab_v:
+    st.markdown(f"<h2 style='color:{clr};text-align:center'>{ver}</h2>",unsafe_allow_html=True)
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("Tech Score", f"{tech:.2f}")
     c2.metric("Sent Rating", sent_rating)
