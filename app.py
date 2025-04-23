@@ -31,7 +31,13 @@ st.markdown("<h1>⚡️ Quant Sentiment Dashboard</h1>", unsafe_allow_html=True)
 with st.sidebar:
     st.header("Configuration")
     tf  = st.selectbox("Timeframe", ["1W","1M","6M","YTD","1Y"], index=1)
-    tkr = st.text_input("Ticker", "NVDA").strip().upper()
+
+    # --- dropdown of the 10 stocks you monitor ----------------------
+    TICKERS = ["NVDA", "AAPL", "MSFT", "TSLA", "AMD",
+               "ADBE", "SCHW", "DE", "FANG", "PLTR"]   # adjust any time
+    tkr = st.selectbox("Ticker", TICKERS, index=0)
+    # ----------------------------------------------------------------
+
     tech_w = st.slider("Technical Weight %", 0, 100, 60)
     sent_w = 100 - tech_w
 
@@ -46,9 +52,6 @@ with st.sidebar:
     show_ev = st.checkbox("EV / EBITDA", True)
 
     run = st.button("🚀 Analyze")
-
-if not run or not tkr:
-    st.stop()
 
 # ────────── date range ─────────────────────────────────────────────
 today = dt.date.today()
