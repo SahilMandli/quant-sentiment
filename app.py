@@ -1,4 +1,3 @@
-# ────────── imports ─────────────────────────────────────────────────
 import streamlit as st
 import pandas as pd, numpy as np, plotly.graph_objects as go
 import yfinance as yf, datetime as dt, requests, base64, os
@@ -14,12 +13,22 @@ if os.path.exists("tron.png"):
     st.markdown(
         f"""
         <style>
-          body,.stApp{{background:
-            linear-gradient(rgba(0,0,0,.9),rgba(0,0,0,.9)),
-            url("data:image/png;base64,{bg64}") center/cover fixed;
-            color:#fff;font-family:Arial}}
-          h1{{color:#0ff;text-align:center;text-shadow:0 0 6px #0ff}}
-          .stSidebar{{background:rgba(0,0,30,.93);border-right:2px solid #0ff}}
+          body, .stApp {{
+            background:
+              linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.3)),
+              url("data:image/png;base64,{bg64}") center/cover fixed;
+            color: #fff;
+            font-family: Arial;
+          }}
+          h1 {{
+            color: #0ff;
+            text-align: center;
+            text-shadow: 0 0 6px #0ff;
+          }}
+          .stSidebar {{
+            background: rgba(0,0,30,0.93);
+            border-right: 2px solid #0ff;
+          }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -34,7 +43,7 @@ with st.sidebar:
 
     # --- dropdown of the 10 stocks you monitor ----------------------
     TICKERS = ["NVDA", "AAPL", "MSFT", "TSLA", "AMD",
-               "ADBE", "SCHW", "DE", "FANG", "PLTR"]   # adjust any time
+               "ADBE", "SCHW", "DE", "FANG", "PLTR"]
     tkr = st.selectbox("Ticker", TICKERS, index=0)
     # ----------------------------------------------------------------
 
@@ -64,7 +73,7 @@ start = dt.date(today.year, 1, 1) if tf == "YTD" else today - dt.timedelta(
 def load_price(tkr, start, end):
     raw = yf.download(tkr, start=start, end=end + dt.timedelta(days=1),
                       progress=False, group_by="ticker")
-    if isinstance(raw.columns, pd.MultiIndex):          # flatten if needed
+    if isinstance(raw.columns, pd.MultiIndex):
         raw = raw.xs(tkr, level=0, axis=1)
     if raw.empty:
         return None
@@ -84,7 +93,6 @@ def load_price(tkr, start, end):
     df["BB_Upper"] = df["SMA_20"] + 2 * std
     df["BB_Lower"] = df["SMA_20"] - 2 * std
     return df
-
 
 price = load_price(tkr, start, today)
 if price is None:
@@ -155,7 +163,6 @@ def reddit_sentiment(tkr):
     df = pd.DataFrame([{"title": r["title"], "score": r["score"]} for r in rows])
     return avg, rating, df
 
-# ---------- helper calls (must precede scoring) --------------------
 fund = fundamentals(tkr)
 sent_val, sent_rating, df_posts = reddit_sentiment(tkr)
 
