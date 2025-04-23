@@ -5,7 +5,7 @@ from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # ────────── page config + background + styling ────────────────
-st.set_page_config("⚡️ Quant Sentiment", "📈", layout="wide")
+st.set_page_config("ValueTron", "📈", layout="wide")
 
 if os.path.exists("tron.png"):
     with open("tron.png", "rb") as f:
@@ -60,7 +60,7 @@ if os.path.exists("tron.png"):
         unsafe_allow_html=True,
     )
 
-st.markdown("<h1>⚡️ Quant Sentiment Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<h1>ValueTron</h1>", unsafe_allow_html=True)
 
 # ────────── sidebar ────────────────────────────────────────────────
 with st.sidebar:
