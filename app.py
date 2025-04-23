@@ -22,7 +22,7 @@ PRICE_TTL   = 900            # 15 min price cache
 # ─── PAGE SETUP ────────────────────────────────────────────────────
 st.set_page_config(page_title="📈 ValueTron", page_icon="⚡️", layout="wide")
 st.markdown("<h1 style='text-align:center'>⚡️ ValueTron</h1>", unsafe_allow_html=True)
-st_autorefresh(interval=30 * 60 * 1000, key="reload")  # reload page every 30 min
+st_autorefresh(interval=30 * 60 * 1000, key="reload")  # reload every 30 min
 
 # ─── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
@@ -90,17 +90,17 @@ def refresh_reddit():
     all_posts = []
     for tk in TICKERS:
         all_posts += fetch_reddit(tk)
-    if not all_posts:
-        return
-    pd.DataFrame(all_posts).to_csv(POSTS_CSV, index=False)
+    if all_posts:
+        pd.DataFrame(all_posts).to_csv(POSTS_CSV, index=False)
 
 refresh_reddit()
 
 # ─── 1 | LOAD POSTS CSV & COMPUTE SENTIMENT ────────────────────────
-if os.path.exists(POSTS_CSV):
-    posts_all = pd.read_csv(POSTS_CSV)
-else:
-    posts_all = pd.DataFrame(columns=["ticker","title","text","score"])
+posts_all = pd.read_csv(POSTS_CSV) if os.path.exists(POSTS_CSV) else pd.DataFrame(columns=["ticker","title","text","score"])
+
+# Ensure 'text' column exists
+if 'text' not in posts_all.columns:
+    posts_all['text'] = ''
 
 sia = SentimentIntensityAnalyzer()
 def hybrid_score(text, upvotes):
@@ -109,51 +109,43 @@ def hybrid_score(text, upvotes):
     weight = min(upvotes, 100) / 100
     return ((tb + vd) / 2) * weight
 
-posts_all["combined"] = posts_all["title"].fillna("") + " " + posts_all["text"].fillna("")
-posts_all["sentiment_score"] = posts_all.apply(
-    lambda r: hybrid_score(r["combined"], r["score"]), axis=1
-)
-
-# Add letter rating per post
-posts_all["rating"] = posts_all["sentiment_score"].apply(
-    lambda x: "A" if x > 0.05 else "C" if x < -0.05 else "B"
-)
+posts_all['combined'] = posts_all['title'].fillna('') + ' ' + posts_all['text'].fillna('')
+posts_all['sentiment_score'] = posts_all.apply(lambda r: hybrid_score(r['combined'], r['score']), axis=1)
+# letter rating per post
+def letter(x): return 'A' if x>0.05 else 'C' if x<-0.05 else 'B'
+posts_all['rating'] = posts_all['sentiment_score'].apply(letter)
 
 # Filter for current ticker
-posts_df = posts_all[posts_all["ticker"] == tkr][["title","rating"]].head(20)
+posts_df = posts_all.loc[posts_all.ticker==tkr, ['title','rating']].head(20)
 
-# Compute overall average sentiment
-sent_val = posts_all[posts_all["ticker"] == tkr]["sentiment_score"].mean() if len(posts_all[posts_all["ticker"] == tkr])>0 else 0.0
+# Compute average sentiment
+sub = posts_all.loc[posts_all.ticker==tkr, 'sentiment_score']
+sent_val = sub.mean() if not sub.empty else 0.0
+sent_rating = letter(sent_val)
 
-sent_rating = "A" if sent_val > 0.05 else "C" if sent_val < -0.05 else "B"
-
-# ─── 2 | LOAD PRICE + COMPUTE INDICATORS ──────────────────────────
+# ─── 2 | PRICE + INDICATORS ───────────────────────────────────────
 @st.cache_data(ttl=PRICE_TTL)
 def load_price(sym, start, end):
-    df = yf.download(sym, start=start, end=end + dt.timedelta(days=1), progress=False, auto_adjust=False)
+    df = yf.download(sym, start=start, end=end+dt.timedelta(days=1), progress=False, auto_adjust=False)
     if df.empty: return None
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(-1)
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-    if "adj_close" in df.columns:
-        df["Adj Close"] = df["adj_close"]
-    elif "close" in df.columns:
-        df["Adj Close"] = df["close"]
-    else:
-        df["Adj Close"] = df.select_dtypes("number").iloc[:,0]
-    df["SMA_20"]    = df["Adj Close"].rolling(20).mean()
-    df["MACD"]      = df["Adj Close"].ewm(span=12).mean() - df["Adj Close"].ewm(span=26).mean()
-    delta            = df["Adj Close"].diff()
-    rs               = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0).rolling(14).mean()).replace(0,np.nan)
-    df["RSI"]      = 100 - 100/(1+rs)
-    std              = df["Adj Close"].rolling(20).std()
-    df["BB_Upper"] = df["SMA_20"] + 2*std
-    df["BB_Lower"] = df["SMA_20"] - 2*std
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(-1)
+    df.columns = df.columns.str.strip().str.lower().str.replace(' ','_')
+    if 'adj_close' in df.columns: df['Adj Close'] = df['adj_close']
+    elif 'close' in df.columns: df['Adj Close'] = df['close']
+    else: df['Adj Close'] = df.select_dtypes('number').iloc[:,0]
+    df['SMA_20']    = df['Adj Close'].rolling(20).mean()
+    df['MACD']      = df['Adj Close'].ewm(span=12).mean() - df['Adj Close'].ewm(span=26).mean()
+    delta          = df['Adj Close'].diff()
+    rs             = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0).rolling(14).mean()).replace(0,np.nan)
+    df['RSI']      = 100 - 100/(1+rs)
+    std            = df['Adj Close'].rolling(20).std()
+    df['BB_Upper'] = df['SMA_20'] + 2*std
+    df['BB_Lower'] = df['SMA_20'] - 2*std
     return df
 
 today = dt.date.today()
 days  = {"1W":7,"1M":30,"6M":180,"1Y":365}[tf]
-start = dt.date(today.year,1,1) if tf=="YTD" else today-dt.timedelta(days=days)
+start = dt.date(today.year,1,1) if tf=='YTD' else today-dt.timedelta(days=days)
 price = load_price(tkr, start, today)
 if price is None:
     st.error(f"❌ No price data for {tkr}")
@@ -163,63 +155,56 @@ last = price.iloc[-1]
 @st.cache_data(ttl=86400)
 def load_fund(sym):
     info = yf.Ticker(sym).info
-    return {"pe": info.get("trailingPE",np.nan),
-            "de": info.get("debtToEquity",np.nan),
-            "ev": info.get("enterpriseToEbitda",np.nan)}
+    return {"pe": info.get("trailingPE", np.nan),
+            "de": info.get("debtToEquity", np.nan),
+            "ev": info.get("enterpriseToEbitda", np.nan)}
 
 fund = load_fund(tkr)
 
-# ─── 3 | COMPUTE TECH + FUND SCORE ────────────────────────────────
+# ─── 3 | TECH + FUND SCORE ─────────────────────────────────────────
 tech = 0.0
-if show_sma and not np.isnan(last["SMA_20"]): tech += 1 if last["Adj Close"]>last["SMA_20"] else -1
-if show_macd and not np.isnan(last["MACD"]): tech += 1 if last["MACD"]>0 else -1
-if show_rsi and not np.isnan(last["RSI"]): tech += 1 if 40<last["RSI"]<70 else -1
-if show_bb and not (np.isnan(last["BB_Upper"]) or np.isnan(last["BB_Lower"])):
-    tech +=  0.5 if last["Adj Close"]> last["BB_Upper"] else 0
-    tech += -0.5 if last["Adj Close"]< last["BB_Lower"] else 0
-if show_pe and not np.isnan(fund["pe"]): tech += 1.0 if fund["pe"]<18 else -1.0
-if show_de and not np.isnan(fund["de"]): tech += 0.5 if fund["de"]<1 else -0.5
-if show_ev and not np.isnan(fund["ev"]): tech += 1.0 if fund["ev"]<12 else -1.0
+if show_sma and not pd.isna(last['SMA_20']): tech += 1 if last['Adj Close']>last['SMA_20'] else -1
+if show_macd and not pd.isna(last['MACD']): tech += 1 if last['MACD']>0 else -1
+if show_rsi and not pd.isna(last['RSI']): tech += 1 if 40<last['RSI']<70 else -1
+if show_bb and not (pd.isna(last['BB_Upper']) or pd.isna(last['BB_Lower'])):
+    tech += 0.5 if last['Adj Close']>last['BB_Upper'] else 0
+    tech -= 0.5 if last['Adj Close']<last['BB_Lower'] else 0
+if show_pe and not pd.isna(fund['pe']): tech += 1.0 if fund['pe']<18 else -1.0
+if show_de and not pd.isna(fund['de']): tech += 0.5 if fund['de']<1 else -0.5
+if show_ev and not pd.isna(fund['ev']): tech += 1.0 if fund['ev']<12 else -1.0
 
 # ─── 4 | BLEND + VERDICT ───────────────────────────────────────────
 blend = tech_w/100*tech + sent_w/100*sent_val
-if blend>2:    ver,clr = "BUY","springgreen"
-elif blend< -2:ver,clr = "SELL","salmon"
-else:          ver,clr = "HOLD","khaki"
+if blend>2:      ver,clr = 'BUY','springgreen'
+elif blend< -2: ver,clr = 'SELL','salmon'
+else:           ver,clr = 'HOLD','khaki'
 
-# ─── 5 | RENDER TABS ───────────────────────────────────────────────
+# ─── 5 | UI TABS ───────────────────────────────────────────────────
 tab_v,tab_ta,tab_f,tab_r = st.tabs(["🏁 Verdict","📈 Technical","📊 Fundamentals","🗣️ Reddit"])
-
 with tab_v:
     st.markdown(f"<h2 style='color:{clr};text-align:center'>{ver}</h2>", unsafe_allow_html=True)
-    c1,c2,c3,c4=st.columns(4)
+    c1,c2,c3,c4 = st.columns(4)
     c1.metric("Tech Score", f"{tech:.2f}")
     c2.metric("Sent Rating", sent_rating)
     c3.metric("Sent Score", f"{sent_val:.2f}")
     c4.metric("Blended", f"{blend:.2f}")
-
 with tab_ta:
     dfp = price.loc[start:today]
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=dfp.index, y=dfp["Adj Close"], name="Price"))
-    if show_sma:   fig.add_trace(go.Scatter(x=dfp.index,y=dfp["SMA_20"],name="SMA-20",line=dict(dash="dash")))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=dfp.index, y=dfp['Adj Close'], name='Price'))
+    if show_sma: fig.add_trace(go.Scatter(x=dfp.index, y=dfp['SMA_20'], name='SMA-20', line=dict(dash='dash')))
     if show_bb:
-        fig.add_trace(go.Scatter(x=dfp.index,y=dfp["BB_Upper"],name="Upper BB",line=dict(dash="dot")))
-        fig.add_trace(go.Scatter(x=dfp.index,y=dfp["BB_Lower"],name="Lower BB",line=dict(dash="dot")))
-    fig.update_layout(template="plotly_dark",height=350)
-    st.plotly_chart(fig,use_container_width=True)
-    if show_macd: st.line_chart(dfp["MACD"],height=180)
-    if show_rsi:  st.line_chart(dfp["RSI"],height=180)
-
+        fig.add_trace(go.Scatter(x=dfp.index, y=dfp['BB_Upper'], name='Upper BB', line=dict(dash='dot')))
+        fig.add_trace(go.Scatter(x=dfp.index, y=dfp['BB_Lower'], name='Lower BB', line=dict(dash='dot')))
+    fig.update_layout(template='plotly_dark', height=350)
+    st.plotly_chart(fig, use_container_width=True)
+    if show_macd: st.line_chart(dfp['MACD'], height=180)
+    if show_rsi:  st.line_chart(dfp['RSI'], height=180)
 with tab_f:
-    rat=pd.DataFrame({
-        "Metric":["P/E","Debt / Equity","EV / EBITDA"],
-        "Value":[fund["pe"],fund["de"],fund["ev"]]
-    }).set_index("Metric")
+    rat = pd.DataFrame({ 'Metric':['P/E','Debt / Equity','EV / EBITDA'], 'Value':[fund['pe'],fund['de'],fund['ev']] }).set_index('Metric')
     st.table(rat)
-
 with tab_r:
     if posts_df.empty:
-        st.info("No Reddit posts.")
+        st.info('No Reddit posts.')
     else:
         st.dataframe(posts_df, hide_index=True, use_container_width=True)
