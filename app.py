@@ -11,7 +11,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from streamlit_autorefresh import st_autorefresh
 
 # ─── CONFIG ────────────────────────────────────────────────────────
-TICKERS     = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR","GME"]
+TICKERS     = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR"]
 SUBS        = ["stocks","investing","wallstreetbets"]
 UA          = {"User-Agent":"Mozilla/5.0 (ValueTron/1.5)"}
 REFRESH_SEC = 3 * 3600       # refresh Reddit every 3 h
@@ -43,35 +43,7 @@ with st.sidebar:
     show_ev = st.checkbox("EV / EBITDA",    True)
 
 # ─── 0 | FETCH & CACHE REDDIT POSTS (silent) ───────────────────────
-def import praw
-
-# Create a global Reddit client using PRAW
-@st.cache_resource
-def reddit_client():
-    return praw.Reddit(
-        client_id=st.secrets["reddit"]["client_id"],
-        client_secret=st.secrets["reddit"]["client_secret"],
-        user_agent=st.secrets["reddit"]["user_agent"]
-    )
-
-reddit = reddit_client()
-
-# Replace old function with PRAW version
 def fetch_reddit(ticker):
-    posts = []
-    for sub in SUBS:
-        try:
-            for post in reddit.subreddit(sub).search(ticker, limit=POST_LIMIT, sort="new"):
-                posts.append({
-                    "ticker": ticker,
-                    "title":  post.title,
-                    "text":   post.selftext or "",
-                    "score":  post.score
-                })
-            time.sleep(1)
-        except Exception as e:
-            print(f"❌ Reddit fetch failed for {sub} {ticker}: {e}")
-    return posts
     rows = []
     for sub in SUBS:
         url = (
