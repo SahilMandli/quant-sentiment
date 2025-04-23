@@ -1,7 +1,5 @@
 # app.py
-
-import os
-import time
+import os, time, shutil
 import datetime as dt
 import requests
 import pandas as pd
@@ -12,40 +10,21 @@ import plotly.graph_objects as go
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from streamlit_autorefresh import st_autorefresh
-import textwrap
-import base64
 
 # ─── CONFIG ────────────────────────────────────────────────────────
 TICKERS       = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR"]
 SUBS          = ["stocks","investing","wallstreetbets"]
-UA            = {"User-Agent":"Mozilla/5.0 (ValueTron/1.2)"}
-COLLECT_EVERY = 3 * 3600    # refresh Reddit cache every 3h
+UA            = {"User-Agent":"Mozilla/5.0 (ValueTron/1.3)"}
+REFRESH_SEC   = 3 * 3600    # refresh Reddit cache every 3h
 POST_LIMIT    = 40
 POSTS_CSV     = "reddit_posts.csv"
 SENTS_CSV     = "reddit_sentiments.csv"
-PRICE_TTL     = 900        # 15-min cache
+PRICE_TTL     = 900         # 15 min price cache
 
 # ─── PAGE SETUP ────────────────────────────────────────────────────
-st.set_page_config(page_title="📈 ValueTron", page_icon="⚡️", layout="wide")
-
-# Optional Tron CSS
-if os.path.exists("tron.png"):
-    b64 = base64.b64encode(open("tron.png","rb").read()).decode()
-    st.markdown(textwrap.dedent(f"""
-      <style>
-        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
-        body, .stApp {{
-          background:
-            linear-gradient(rgba(0,0,0,.92),rgba(0,0,0,.92)),
-            url("data:image/png;base64,{b64}") center/cover fixed;
-          color:#fff; font-family:'Orbitron',sans-serif;
-        }}
-        h1 {{ color:#0ff; text-shadow:0 0 6px #0ff; text-align:center; }}
-        .stSidebar {{ background:rgba(0,0,30,.95); border-right:2px solid #0ff; }}
-      </style>"""), unsafe_allow_html=True)
-
-st.markdown("<h1>⚡️ ValueTron</h1>", unsafe_allow_html=True)
-st_autorefresh(interval=1_800_000, key="full_refresh")  # reload page every 30m
+st.set_page_config("📈 ValueTron", "⚡️", layout="wide")
+st.markdown("<h1 style='text-align:center'>⚡️ ValueTron</h1>", unsafe_allow_html=True)
+st_autorefresh(interval=30 * 60 * 1000, key="reload")  # full page reload every 30m
 
 # ─── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
@@ -65,234 +44,210 @@ with st.sidebar:
     show_de = st.checkbox("Debt / Equity", True)
     show_ev = st.checkbox("EV / EBITDA",   True)
 
-# ─── 0 · REFRESH REDDIT CACHE (silent) ─────────────────────────────
-def reddit_rows(sym: str):
+# ─── 0 | FETCH & CACHE REDDIT POSTS + SENTIMENT ───────────────────
+def fetch_reddit(ticker):
     rows = []
-    # 1) official Reddit JSON
+    # 1) Reddit JSON
     for sub in SUBS:
-        url = (
-            f"https://www.reddit.com/r/{sub}/search.json"
-            f"?q={sym}&restrict_sr=1&sort=new&limit={POST_LIMIT}&raw_json=1"
-        )
+        url = (f"https://www.reddit.com/r/{sub}/search.json"
+               f"?q={ticker}&restrict_sr=1&sort=new&limit={POST_LIMIT}&raw_json=1")
         try:
-            r = requests.get(url, headers=UA, timeout=10)
-            if r.status_code == 200:
-                for child in r.json().get("data", {}).get("children", []):
-                    d = child["data"]
+            r = requests.get(url, headers=UA, timeout=8)
+            if r.ok:
+                for c in r.json().get("data",{}).get("children",[]):
+                    d = c["data"]
                     rows.append({
-                        "ticker": sym,
-                        "title":   d.get("title",""),
-                        "text":    d.get("selftext",""),
-                        "score":   d.get("score",0)
+                        "ticker": ticker,
+                        "title":  d.get("title",""),
+                        "text":   d.get("selftext",""),
+                        "score":  d.get("score",0)
                     })
         except:
             pass
         time.sleep(0.3)
-
     if rows:
         return rows
-
     # 2) Pushshift fallback
     base = "https://api.pushshift.io/reddit/search/submission/"
     for sub in SUBS:
-        url = f"{base}?q={sym}&subreddit={sub}&after=7d&size={POST_LIMIT}&sort=desc"
+        url = f"{base}?q={ticker}&subreddit={sub}&after=7d&size={POST_LIMIT}&sort=desc"
         try:
-            data = requests.get(url, timeout=10).json().get("data", [])
-            for d in data:
+            for d in requests.get(url,timeout=8).json().get("data",[]):
                 rows.append({
-                    "ticker": sym,
-                    "title":   d.get("title",""),
-                    "text":    d.get("selftext",""),
-                    "score":   d.get("score",0)
+                    "ticker": ticker,
+                    "title":  d.get("title",""),
+                    "text":   d.get("selftext",""),
+                    "score":  d.get("score",0)
                 })
         except:
             pass
-        time.sleep(0.3)
-
+        time.sleep(0.2)
     return rows
 
-def refresh_cache():
-    if os.path.exists(SENTS_CSV) and \
-       (time.time() - os.path.getmtime(SENTS_CSV) < COLLECT_EVERY):
+def refresh_reddit():
+    # only if SENTS_CSV missing or stale
+    if os.path.exists(SENTS_CSV):
+        age = time.time() - os.path.getmtime(SENTS_CSV)
+        if age < REFRESH_SEC:
+            return
+    all_posts = []
+    for tk in TICKERS:
+        all_posts += fetch_reddit(tk)
+    if not all_posts:
         return
-
-    all_rows = []
-    for sym in TICKERS:
-        all_rows.extend(reddit_rows(sym))
-    if not all_rows:
-        return
-
-    df = pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_posts)
     sia = SentimentIntensityAnalyzer()
-    df["sentiment"] = (
-        df["title"].fillna("") + " " + df["text"].fillna("")
-    ).apply(lambda t: (TextBlob(t).sentiment.polarity +
-                      sia.polarity_scores(t)["compound"]) / 2)
+    df["sentiment"] = df.apply(
+        lambda r: ((TextBlob(r.title+" "+r.text).sentiment.polarity
+                    + sia.polarity_scores(r.title+" "+r.text)["compound"])/2)
+                   * min(r.score,100)/100,
+        axis=1
+    )
     df.to_csv(POSTS_CSV, index=False)
-    df.groupby("ticker")["sentiment"].mean().round(4).reset_index() \
-      .to_csv(SENTS_CSV, index=False)
+    df.groupby("ticker")["sentiment"].mean().round(4)\
+      .reset_index().to_csv(SENTS_CSV, index=False)
 
-refresh_cache()
+refresh_reddit()
 
-# ─── 1 · LOAD & CLASSIFY SENTIMENT ────────────────────────────────
-sent_val = 0.0
+# ─── 1 | LOAD & CLASSIFY SENTIMENT ────────────────────────────────
+# 1a) from fresh cache
+sent_df = pd.DataFrame()
 if os.path.exists(SENTS_CSV):
-    df_s = pd.read_csv(SENTS_CSV).set_index("ticker")
-    if "sentiment" in df_s.columns:
-        sent_val = float(df_s.at[tkr, "sentiment"])
-    elif "sentiment_score" in df_s.columns:
-        sent_val = float(df_s.at[tkr, "sentiment_score"])
+    sent_df = pd.read_csv(SENTS_CSV)
+try:
+    sent_val = float(sent_df.loc[sent_df.ticker==tkr, "sentiment"].mean())
+except:
+    sent_val = 0.0
 
-# tighten thresholds to ±5%
+# 1b) classify (±5%)
 if   sent_val >  0.05: sent_rating = "A"
 elif sent_val < -0.05: sent_rating = "C"
 else:                  sent_rating = "B"
 
-try:
-    df_posts = (
-        pd.read_csv(POSTS_CSV)
-          .query("ticker == @tkr")[["title","score"]]
-          .head(20)
-    )
-except:
-    df_posts = pd.DataFrame(columns=["title","score"])
+# 1c) load raw posts for display
+posts_df = pd.DataFrame()
+if os.path.exists(POSTS_CSV):
+    try:
+        posts_df = pd.read_csv(POSTS_CSV)
+        posts_df = posts_df.loc[posts_df.ticker==tkr, ["title","score"]].head(20)
+    except:
+        posts_df = pd.DataFrame(columns=["title","score"])
 
-# ─── 2 · PRICE + INDICATORS ────────────────────────────────────────
+# ─── 2 | LOAD PRICE + COMPUTE INDICATORS ──────────────────────────
 @st.cache_data(ttl=PRICE_TTL)
-def load_price(sym: str, start: dt.date, end: dt.date):
-    raw = yf.download(
-        sym,
-        start=start,
-        end=end + dt.timedelta(days=1),
-        progress=False,
-        auto_adjust=False
-    )
-    if raw.empty:
+def load_price(sym, start, end):
+    df = yf.download(sym, start=start, end=end+dt.timedelta(days=1),
+                     progress=False, auto_adjust=False)
+    if df.empty:
         return None
-
-    # flatten any MultiIndex
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(1)
-
-    # normalize
-    raw.columns = raw.columns.str.replace(" ","").str.lower()
-
-    # pick a close column
-    cols = raw.columns
-    if "adjclose" in cols:
-        base = "adjclose"
-    elif any(c.startswith("close") for c in cols):
-        base = [c for c in cols if c.startswith("close")][0]
+    # flatten multi-index if present
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(-1)
+    # normalize to lower, no spaces
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ","_")
+    # pick one close column
+    if "adj_close" in df.columns:
+        df["Adj Close"] = df["adj_close"]
+    elif "close" in df.columns:
+        df["Adj Close"] = df["close"]
     else:
-        base = raw.select_dtypes("number").columns[0]
-
-    df = raw.copy()
-    series = df[base]
-    if isinstance(series, pd.DataFrame):
-        series = series.iloc[:,0]
-    df["Adj Close"] = series
-
+        # fallback numeric
+        num = df.select_dtypes("number")
+        df["Adj Close"] = num.iloc[:,0]
     # indicators
-    df["SMA_20"]     = df["Adj Close"].rolling(20).mean()
-    df["MACD"]       = df["Adj Close"].ewm(span=12).mean() \
-                       - df["Adj Close"].ewm(span=26).mean()
-    delta            = df["Adj Close"].diff()
-    rs               = (delta.clip(lower=0).rolling(14).mean() /
-                        -delta.clip(upper=0).rolling(14).mean()).replace(0,np.nan)
-    df["RSI"]        = 100 - 100/(1+rs)
-    std              = df["Adj Close"].rolling(20).std()
-    df["BB_Upper"]   = df["SMA_20"] + 2*std
-    df["BB_Lower"]   = df["SMA_20"] - 2*std
-
+    df["SMA_20"]   = df["Adj Close"].rolling(20).mean()
+    df["MACD"]     = df["Adj Close"].ewm(span=12).mean() - df["Adj Close"].ewm(span=26).mean()
+    delta         = df["Adj Close"].diff()
+    rs            = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0).rolling(14).mean()).replace(0,np.nan)
+    df["RSI"]     = 100 - 100/(1+rs)
+    std           = df["Adj Close"].rolling(20).std()
+    df["BB_Upper"]= df["SMA_20"] + 2*std
+    df["BB_Lower"]= df["SMA_20"] - 2*std
     return df
 
 today = dt.date.today()
-days  = {"1W":7,"1M":30,"6M":180,"1Y":365}.get(tf,365)
-start = dt.date(today.year,1,1) if tf=="YTD" else today - dt.timedelta(days=days)
+delta = {"1W":7,"1M":30,"6M":180,"1Y":365}[tf]
+start = dt.date(today.year,1,1) if tf=="YTD" else today-dt.timedelta(days=delta)
 price = load_price(tkr, start, today)
 if price is None:
-    st.error(f"Price data unavailable for {tkr}")
+    st.error(f"❌ No price data for {tkr}")
     st.stop()
 last = price.iloc[-1]
 
+# ─── 3 | LOAD FUNDAMENTALS ─────────────────────────────────────────
 @st.cache_data(ttl=86400)
-def load_fund(sym: str):
+def load_fund(sym):
     info = yf.Ticker(sym).info
     return {
-        "pe": info.get("trailingPE",     np.nan),
-        "de": info.get("debtToEquity",   np.nan),
-        "ev": info.get("enterpriseToEbitda", np.nan)
+        "pe": info.get("trailingPE",np.nan),
+        "de": info.get("debtToEquity",np.nan),
+        "ev": info.get("enterpriseToEbitda",np.nan)
     }
 
 fund = load_fund(tkr)
 
-# ─── 3 · COMPUTE TECH + FUND SCORE ────────────────────────────────
+# ─── 4 | COMPUTE TECHNICAL + FUND SCORE ───────────────────────────
 tech = 0.0
-if show_sma  and not np.isnan(last.SMA_20):
+if show_sma  and not np.isnan(last["SMA_20"]):
     tech += 1 if last["Adj Close"] > last["SMA_20"] else -1
-if show_macd and not np.isnan(last.MACD):
+if show_macd and not np.isnan(last["MACD"]):
     tech += 1 if last["MACD"] > 0 else -1
-if show_rsi  and not np.isnan(last.RSI):
+if show_rsi  and not np.isnan(last["RSI"]):
     tech += 1 if 40 < last["RSI"] < 70 else -1
-if show_bb and not (np.isnan(last.BB_Upper) or np.isnan(last.BB_Lower)):
-    tech += 0.5 if last["Adj Close"] > last["BB_Upper"] else 0
-    tech -= 0.5 if last["Adj Close"] < last["BB_Lower"] else 0
+if show_bb  and not (np.isnan(last["BB_Upper"]) or np.isnan(last["BB_Lower"])):
+    tech +=  0.5 if last["Adj Close"] >  last["BB_Upper"] else 0
+    tech += -0.5 if last["Adj Close"] <  last["BB_Lower"] else 0
 
 if show_pe and not np.isnan(fund["pe"]):
-    tech += 1   if fund["pe"] < 18 else -1
+    tech += 1.0 if fund["pe"] < 18 else -1.0
 if show_de and not np.isnan(fund["de"]):
-    tech += 0.5 if fund["de"] < 1  else -0.5
+    tech += 0.5 if fund["de"] < 1 else -0.5
 if show_ev and not np.isnan(fund["ev"]):
-    tech += 1   if fund["ev"] < 12 else -1
+    tech += 1.0 if fund["ev"] < 12 else -1.0
 
-blend = tech_w/100*tech + sent_w/100*sent_val
-if blend >  2:    ver,color = "BUY","springgreen"
-elif blend < -2:  ver,color = "SELL","salmon"
-else:             ver,color = "HOLD","khaki"
+# ─── 5 | BLEND + VERDICT ───────────────────────────────────────────
+blend = tech_w/100 * tech + sent_w/100 * sent_val
+if blend >  2: ver, clr = "BUY",  "springgreen"
+elif blend < -2: ver, clr = "SELL", "salmon"
+else:            ver, clr = "HOLD","khaki"
 
-# ─── 4 · RENDER TABS ───────────────────────────────────────────────
-tab_v, tab_ta, tab_f, tab_r = st.tabs(
+# ─── 6 | RENDER TABS ───────────────────────────────────────────────
+tab_v,tab_ta,tab_f,tab_r = st.tabs(
     ["🏁 Verdict","📈 Technical","📊 Fundamentals","🗣️ Reddit"]
 )
 
 with tab_v:
-    st.markdown(f"<h2 style='color:{color};text-align:center'>{ver}</h2>",
-                unsafe_allow_html=True)
+    st.markdown(f"<h2 style='color:{clr};text-align:center'>{ver}</h2>",unsafe_allow_html=True)
     c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Tech Score" , f"{tech:.2f}")
+    c1.metric("Tech Score",  f"{tech:.2f}")
     c2.metric("Sent Rating", sent_rating)
-    c3.metric("Sent Score" , f"{sent_val:.2f}")
-    c4.metric("Blended"    , f"{blend:.2f}")
-    st.caption(f"{tech_w}% Tech  +  {sent_w}% Sentiment")
+    c3.metric("Sent Score",  f"{sent_val:.2f}")
+    c4.metric("Blended",     f"{blend:.2f}")
+    st.caption(f"{tech_w}% Technical + {sent_w}% Sentiment")
 
 with tab_ta:
     dfp = price.loc[start:today]
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=dfp.index, y=dfp["Adj Close"], name="Price"))
     if show_sma:
-        fig.add_trace(go.Scatter(
-            x=dfp.index, y=dfp["SMA_20"], name="SMA-20",
-            line=dict(dash="dash")))
+        fig.add_trace(go.Scatter(x=dfp.index, y=dfp["SMA_20"], name="SMA-20", line=dict(dash="dash")))
     if show_bb:
-        fig.add_trace(go.Scatter(
-            x=dfp.index, y=dfp["BB_Upper"], name="Upper BB",
-            line=dict(dash="dot")))
-        fig.add_trace(go.Scatter(
-            x=dfp.index, y=dfp["BB_Lower"], name="Lower BB",
-            line=dict(dash="dot")))
-    fig.update_layout(template="plotly_dark", height=340)
+        fig.add_trace(go.Scatter(x=dfp.index, y=dfp["BB_Upper"], name="Upper BB", line=dict(dash="dot")))
+        fig.add_trace(go.Scatter(x=dfp.index, y=dfp["BB_Lower"], name="Lower BB", line=dict(dash="dot")))
+    fig.update_layout(template="plotly_dark", height=350)
     st.plotly_chart(fig, use_container_width=True)
     if show_macd: st.line_chart(dfp["MACD"], height=180)
     if show_rsi:  st.line_chart(dfp["RSI"],  height=180)
 
 with tab_f:
-    st.table(pd.DataFrame({
+    ratios = pd.DataFrame({
         "Metric": ["P/E","Debt / Equity","EV / EBITDA"],
         "Value":  [fund["pe"],fund["de"],fund["ev"]]
-    }).set_index("Metric"))
+    }).set_index("Metric")
+    st.table(ratios)
 
 with tab_r:
-    if df_posts.empty:
-        st.info("No recent posts.")
+    if posts_df.empty:
+        st.info("No Reddit posts found.")
     else:
-        st.dataframe(df_posts, hide_index=True, use_container_width=True)
+        st.dataframe(posts_df, hide_index=True, use_container_width=True)
