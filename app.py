@@ -9,20 +9,37 @@ import plotly.graph_objects as go
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from streamlit_autorefresh import st_autorefresh
+import base64, textwrap
 
 # ─── CONFIG ────────────────────────────────────────────────────────
 TICKERS     = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR","GME"]
 SUBS        = ["stocks","investing","wallstreetbets"]
 UA          = {"User-Agent":"Mozilla/5.0 (ValueTron/1.5)"}
-REFRESH_SEC = 3 * 3600       # refresh Reddit every 3 h
+REFRESH_SEC = 3 * 3600       # refresh Reddit every 3 h
 POST_LIMIT  = 40
 POSTS_CSV   = "reddit_posts.csv"
-PRICE_TTL   = 900            # 15 min price cache
+PRICE_TTL   = 900            # 15 min price cache
 
-# ─── PAGE SETUP ────────────────────────────────────────────────────
+# ─── PAGE SETUP & BACKGROUND ──────────────────────────────────────
 st.set_page_config(page_title="📈 ValueTron", page_icon="⚡️", layout="wide")
+# Optional Tron-style background
+if os.path.exists("tron.png"):
+    with open("tron.png","rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    st.markdown(textwrap.dedent(f"""
+    <style>
+      body, .stApp {{
+        background: linear-gradient(rgba(0,0,0,.9), rgba(0,0,0,.9)),
+                    url("data:image/png;base64,{b64}") no-repeat center center fixed;
+        background-size: cover;
+        font-family: 'Segoe UI', sans-serif;
+        color: white;
+      }}
+    </style>
+    """), unsafe_allow_html=True)
+
 st.markdown("<h1 style='text-align:center'>⚡️ ValueTron</h1>", unsafe_allow_html=True)
-st_autorefresh(interval=30 * 60 * 1000, key="reload")  # reload every 30 min
+st_autorefresh(interval=30 * 60 * 1000, key="reload")  # reload every 30 min
 
 # ─── SIDEBAR ───────────────────────────────────────────────────────
 with st.sidebar:
@@ -30,6 +47,18 @@ with st.sidebar:
     tkr    = st.selectbox("Ticker", TICKERS, index=0)
     tech_w = st.slider("Technical Weight %", 0, 100, 60)
     sent_w = 100 - tech_w
+
+    # Show company name and current price
+    try:
+        info = yf.Ticker(tkr).info
+        name = info.get("shortName")
+        price_now = info.get("currentPrice")
+        if name:
+            st.markdown(f"**{tkr} – {name}**")
+        if price_now:
+            st.markdown(f"💲{price_now:.2f}")
+    except:
+        pass
 
     st.markdown("### Technical Indicators")
     show_sma  = st.checkbox("SMA-20", True)
@@ -97,8 +126,7 @@ refresh_reddit()
 
 # ─── 1 | LOAD POSTS CSV & COMPUTE SENTIMENT ────────────────────────
 posts_all = pd.read_csv(POSTS_CSV) if os.path.exists(POSTS_CSV) else pd.DataFrame(columns=["ticker","title","text","score"])
-
-# Ensure 'text' column exists
+# Ensure 'text' exists
 if 'text' not in posts_all.columns:
     posts_all['text'] = ''
 
@@ -106,22 +134,26 @@ sia = SentimentIntensityAnalyzer()
 def hybrid_score(text, upvotes):
     tb = TextBlob(text).sentiment.polarity
     vd = sia.polarity_scores(text)["compound"]
-    weight = min(upvotes, 100) / 100
-    return ((tb + vd) / 2) * weight
+    return ((tb + vd) / 2) * min(upvotes, 100) / 100
 
 posts_all['combined'] = posts_all['title'].fillna('') + ' ' + posts_all['text'].fillna('')
 posts_all['sentiment_score'] = posts_all.apply(lambda r: hybrid_score(r['combined'], r['score']), axis=1)
-# letter rating per post
-def letter(x): return 'A' if x>0.05 else 'C' if x<-0.05 else 'B'
-posts_all['rating'] = posts_all['sentiment_score'].apply(letter)
+# letter rating
+posts_all['rating'] = posts_all['sentiment_score'].apply(lambda x: 'A' if x>0.05 else 'C' if x<-0.05 else 'B')
+
+# save overall rating per ticker
+overall = posts_all.groupby('ticker')['rating']\
+    .apply(lambda x: x.value_counts().idxmax())\
+    .reset_index(name='overall_rating')
+overall.to_csv('reddit_sentiment_rating.csv', index=False)
 
 # Filter for current ticker
 posts_df = posts_all.loc[posts_all.ticker==tkr, ['title','rating']].head(20)
-
-# Compute average sentiment
+posts_df.columns = ['Reddit Post','Sentiment']
+# Compute average
 sub = posts_all.loc[posts_all.ticker==tkr, 'sentiment_score']
 sent_val = sub.mean() if not sub.empty else 0.0
-sent_rating = letter(sent_val)
+sent_rating = 'A' if sent_val>0.05 else 'C' if sent_val<-0.05 else 'B'
 
 # ─── 2 | PRICE + INDICATORS ───────────────────────────────────────
 @st.cache_data(ttl=PRICE_TTL)
