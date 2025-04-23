@@ -4,7 +4,7 @@ import yfinance as yf, datetime as dt, requests, base64, os
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# ────────── page config + optional background image ────────────────
+# ────────── page config + background + title styling ────────────────
 st.set_page_config("⚡️ Quant Sentiment", "📈", layout="wide")
 
 if os.path.exists("tron.png"):
@@ -20,10 +20,24 @@ if os.path.exists("tron.png"):
             color: #fff;
             font-family: Arial;
           }}
+          /* make all h1 and h2 headers sit on a dark translucent box */
+          h1, h2 {{
+            background: rgba(0,0,0,0.6);
+            padding: 0.2em 0.5em;
+            border-radius: 0.3em;
+            display: inline-block;
+          }}
           h1 {{
             color: #0ff;
-            text-align: center;
             text-shadow: 0 0 6px #0ff;
+          }}
+          /* style the tab labels */
+          [role="tab"] {{
+            background: rgba(0,0,0,0.6) !important;
+            color: #fff !important;
+            border-radius: 0.3em !important;
+            padding: 0.2em 0.5em !important;
+            margin: 0.1em 0.2em !important;
           }}
           .stSidebar {{
             background: rgba(0,0,30,0.93);
@@ -41,11 +55,9 @@ with st.sidebar:
     st.header("Configuration")
     tf  = st.selectbox("Timeframe", ["1W","1M","6M","YTD","1Y"], index=1)
 
-    # --- dropdown of the 10 stocks you monitor ----------------------
     TICKERS = ["NVDA", "AAPL", "MSFT", "TSLA", "AMD",
                "ADBE", "SCHW", "DE", "FANG", "PLTR"]
     tkr = st.selectbox("Ticker", TICKERS, index=0)
-    # ----------------------------------------------------------------
 
     tech_w = st.slider("Technical Weight %", 0, 100, 60)
     sent_w = 100 - tech_w
@@ -95,13 +107,9 @@ def load_price(tkr, start, end):
     return df
 
 price = load_price(tkr, start, today)
-if price is None:
+if price is None or price.dropna(subset=["Adj Close"]).empty:
     st.error("No price data."); st.stop()
-
-price = price.dropna(subset=["Adj Close"])
-if price.empty:
-    st.error("Not enough rows after dropna."); st.stop()
-last = price.iloc[-1]
+last = price.dropna(subset=["Adj Close"]).iloc[-1]
 
 # ────────── fundamentals ───────────────────────────────────────────
 @st.cache_data(ttl=86400)
@@ -121,7 +129,7 @@ def fundamentals(tkr):
             pass
     return dict(pe=pe, de=de, ev=ev)
 
-# ────────── reddit sentiment via api.reddit.com ────────────────────
+# ────────── reddit sentiment ───────────────────────────────────────
 @st.cache_data(ttl=300)
 def reddit_sentiment(tkr):
     hdr = {"User-Agent": "QuantDash/0.1"}
@@ -147,15 +155,10 @@ def reddit_sentiment(tkr):
 
     if not rows:
         return 0.0, "B", pd.DataFrame()
-
     sia = SentimentIntensityAnalyzer()
-
     def hybrid(r):
         txt = f"{r['title']} {r['text']}"
-        base = (
-            TextBlob(txt).sentiment.polarity
-            + sia.polarity_scores(txt)["compound"]
-        ) / 2
+        base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"]) / 2
         return base * min(r["score"], 100) / 100
 
     avg = sum(hybrid(r) for r in rows) / len(rows)
@@ -166,32 +169,23 @@ def reddit_sentiment(tkr):
 fund = fundamentals(tkr)
 sent_val, sent_rating, df_posts = reddit_sentiment(tkr)
 
-# ────────── tech + fundamental score ───────────────────────────────
+# ────────── scoring ────────────────────────────────────────────────
 tech = 0.0
-if show_sma and "SMA_20" in last:
-    tech += 1 if last["Adj Close"] > last["SMA_20"] else -1
-if show_macd and "MACD" in last:
-    tech += 1 if last["MACD"] > 0 else -1
-if show_rsi and "RSI" in last:
-    tech += 1 if 40 < last["RSI"] < 70 else -1
-if show_bb and {"BB_Upper", "BB_Lower"}.issubset(last.index):
-    if last["Adj Close"] > last["BB_Upper"]:
-        tech += 0.5
-    elif last["Adj Close"] < last["BB_Lower"]:
-        tech -= 0.5
+if show_sma and "SMA_20" in last:    tech += 1 if last["Adj Close"] > last["SMA_20"] else -1
+if show_macd and "MACD" in last:     tech += 1 if last["MACD"] > 0 else -1
+if show_rsi and "RSI" in last:       tech += 1 if 40 < last["RSI"] < 70 else -1
+if show_bb and {"BB_Upper","BB_Lower"}.issubset(last.index):
+    if last["Adj Close"] > last["BB_Upper"]: tech += 0.5
+    elif last["Adj Close"] < last["BB_Lower"]: tech -= 0.5
+if show_pe and not np.isnan(fund["pe"]):    tech += 1 if fund["pe"] < 18 else -1
+if show_de and not np.isnan(fund["de"]):    tech += 0.5 if fund["de"] < 1 else -0.5
+if show_ev and not np.isnan(fund["ev"]):    tech += 1 if fund["ev"] < 12 else -1
 
-if show_pe and not np.isnan(fund["pe"]):
-    tech += 1 if fund["pe"] < 18 else -1
-if show_de and not np.isnan(fund["de"]):
-    tech += 0.5 if fund["de"] < 1 else -0.5
-if show_ev and not np.isnan(fund["ev"]):
-    tech += 1 if fund["ev"] < 12 else -1
-
-blend = tech_w / 100 * tech + sent_w / 100 * sent_val
+blend = tech_w/100*tech + sent_w/100*sent_val
 ver, color = (
-    ("BUY", "springgreen") if blend > 2 else
-    ("SELL", "salmon") if blend < -2 else
-    ("HOLD", "khaki")
+    ("BUY","springgreen") if blend>2 else
+    ("SELL","salmon") if blend< -2 else
+    ("HOLD","khaki")
 )
 
 # ────────── UI tabs ────────────────────────────────────────────────
@@ -215,18 +209,13 @@ with tab_v:
 with tab_ta:
     df = price.loc[start:today]
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["Adj Close"], name="Price",
-                             line=dict(color="#0ff")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["Adj Close"], name="Price", line=dict(color="#0ff")))
     if show_sma and "SMA_20" in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df["SMA_20"], name="SMA-20",
-                                 line=dict(color="#ff0", dash="dash")))
-    if show_bb and {"BB_Upper", "BB_Lower"}.issubset(df.columns):
-        fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Upper BB",
-                                 line=dict(color="#0f0", dash="dot")))
-        fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Lower BB",
-                                 line=dict(color="#0f0", dash="dot")))
-    fig.update_layout(template="plotly_dark", height=350,
-                      title="Price / SMA / Bollinger")
+        fig.add_trace(go.Scatter(x=df.index, y=df["SMA_20"], name="SMA-20", line=dict(color="#ff0", dash="dash")))
+    if show_bb and {"BB_Upper","BB_Lower"}.issubset(df.columns):
+        fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="Upper BB", line=dict(color="#0f0", dash="dot")))
+        fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="Lower BB", line=dict(color="#0f0", dash="dot")))
+    fig.update_layout(template="plotly_dark", height=350, title="Price / SMA / Bollinger")
     st.plotly_chart(fig, use_container_width=True)
 
     if show_macd and "MACD" in df.columns:
@@ -235,24 +224,20 @@ with tab_ta:
         st.line_chart(df["RSI"], height=200)
 
     st.subheader("Candlestick")
-    cand = go.Figure(
-        data=[go.Candlestick(
-            x=df.index, open=df["Open"], high=df["High"],
-            low=df["Low"], close=df["Close"],
-            increasing_line_color="#0ff", decreasing_line_color="#f44")]
-    )
-    cand.update_layout(template="plotly_dark", height=420,
-                       xaxis_rangeslider_visible=False)
+    cand = go.Figure(data=[go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_line_color="#0ff", decreasing_line_color="#f44"
+    )])
+    cand.update_layout(template="plotly_dark", height=420, xaxis_rangeslider_visible=False)
     st.plotly_chart(cand, use_container_width=True)
 
 with tab_f:
     st.header("Key Ratios")
-    st.table(
-        pd.DataFrame(
-            {"Metric": ["P/E", "Debt / Equity", "EV / EBITDA"],
-             "Value": [fund["pe"], fund["de"], fund["ev"]]}
-        ).set_index("Metric")
-    )
+    st.table(pd.DataFrame(
+        {"Metric":["P/E","Debt / Equity","EV / EBITDA"], 
+         "Value":[fund["pe"], fund["de"], fund["ev"]]}
+    ).set_index("Metric"))
 
 with tab_r:
     st.header("Latest Reddit Mentions")
