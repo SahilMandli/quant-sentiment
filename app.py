@@ -43,7 +43,35 @@ with st.sidebar:
     show_ev = st.checkbox("EV / EBITDA",    True)
 
 # ─── 0 | FETCH & CACHE REDDIT POSTS (silent) ───────────────────────
+def import praw
+
+# Create a global Reddit client using PRAW
+@st.cache_resource
+def reddit_client():
+    return praw.Reddit(
+        client_id=st.secrets["reddit"]["client_id"],
+        client_secret=st.secrets["reddit"]["client_secret"],
+        user_agent=st.secrets["reddit"]["user_agent"]
+    )
+
+reddit = reddit_client()
+
+# Replace old function with PRAW version
 def fetch_reddit(ticker):
+    posts = []
+    for sub in SUBS:
+        try:
+            for post in reddit.subreddit(sub).search(ticker, limit=POST_LIMIT, sort="new"):
+                posts.append({
+                    "ticker": ticker,
+                    "title":  post.title,
+                    "text":   post.selftext or "",
+                    "score":  post.score
+                })
+            time.sleep(1)
+        except Exception as e:
+            print(f"❌ Reddit fetch failed for {sub} {ticker}: {e}")
+    return posts
     rows = []
     for sub in SUBS:
         url = (
