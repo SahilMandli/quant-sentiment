@@ -4,7 +4,7 @@ import yfinance as yf, datetime as dt, requests, base64, os
 from textblob import TextBlob
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# ────────── page config + background + title styling ────────────────
+# ────────── page config + background + styling ────────────────
 st.set_page_config("⚡️ Quant Sentiment", "📈", layout="wide")
 
 if os.path.exists("tron.png"):
@@ -20,7 +20,7 @@ if os.path.exists("tron.png"):
             color: #fff;
             font-family: Arial;
           }}
-          /* make all h1 and h2 headers sit on a dark translucent box */
+          /* headers on translucent box */
           h1, h2 {{
             background: rgba(0,0,0,0.6);
             padding: 0.2em 0.5em;
@@ -31,13 +31,25 @@ if os.path.exists("tron.png"):
             color: #0ff;
             text-shadow: 0 0 6px #0ff;
           }}
-          /* style the tab labels */
+          /* tab labels styling */
           [role="tab"] {{
             background: rgba(0,0,0,0.6) !important;
             color: #fff !important;
             border-radius: 0.3em !important;
             padding: 0.2em 0.5em !important;
             margin: 0.1em 0.2em !important;
+          }}
+          /* table styling for better visibility */
+          div.stTable table {{
+            background-color: rgba(0,0,0,0.6) !important;
+          }}
+          div.stTable th {{
+            background-color: rgba(0,0,0,0.8) !important;
+            color: #0ff !important;
+          }}
+          div.stTable td {{
+            background-color: rgba(0,0,0,0.6) !important;
+            color: #fff !important;
           }}
           .stSidebar {{
             background: rgba(0,0,30,0.93);
@@ -80,7 +92,7 @@ start = dt.date(today.year, 1, 1) if tf == "YTD" else today - dt.timedelta(
     days={"1W": 7, "1M": 30, "6M": 180, "1Y": 365}[tf]
 )
 
-# ────────── price + indicators ─────────────────────────────────────
+# ────────── load price + indicators ─────────────────────────────────────
 @st.cache_data(ttl=900)
 def load_price(tkr, start, end):
     raw = yf.download(tkr, start=start, end=end + dt.timedelta(days=1),
@@ -89,11 +101,9 @@ def load_price(tkr, start, end):
         raw = raw.xs(tkr, level=0, axis=1)
     if raw.empty:
         return None
-
     df = raw.copy()
     if "Adj Close" not in df.columns:
         df["Adj Close"] = df["Close"]
-
     df["SMA_20"] = df["Adj Close"].rolling(20).mean()
     df["MACD"]   = df["Adj Close"].ewm(12).mean() - df["Adj Close"].ewm(26).mean()
     delta = df["Adj Close"].diff()
@@ -152,7 +162,6 @@ def reddit_sentiment(tkr):
             ]
         except Exception:
             pass
-
     if not rows:
         return 0.0, "B", pd.DataFrame()
     sia = SentimentIntensityAnalyzer()
@@ -160,7 +169,6 @@ def reddit_sentiment(tkr):
         txt = f"{r['title']} {r['text']}"
         base = (TextBlob(txt).sentiment.polarity + sia.polarity_scores(txt)["compound"]) / 2
         return base * min(r["score"], 100) / 100
-
     avg = sum(hybrid(r) for r in rows) / len(rows)
     rating = "A" if avg > 0.2 else "C" if avg < -0.2 else "B"
     df = pd.DataFrame([{"title": r["title"], "score": r["score"]} for r in rows])
