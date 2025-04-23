@@ -11,7 +11,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from streamlit_autorefresh import st_autorefresh
 
 # ─── CONFIG ────────────────────────────────────────────────────────
-TICKERS     = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR"]
+TICKERS     = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR","GME"]
 SUBS        = ["stocks","investing","wallstreetbets"]
 UA          = {"User-Agent":"Mozilla/5.0 (ValueTron/1.5)"}
 REFRESH_SEC = 3 * 3600       # refresh Reddit every 3 h
