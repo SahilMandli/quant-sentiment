@@ -289,24 +289,3 @@ with tab_r:
     # Render paragraph
     st.markdown(" ".join(explanation_parts), unsafe_allow_html=True)
 
-# --- Small round profile picture in bottom-right corner ---
-st.markdown(
-    """
-    <style>
-    .fixed-profile-pic {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        width: 70px;
-        height: 70px;
-        border-radius: 50%;
-        border: 2px solid #ffffff;
-        box-shadow: 0 0 8px rgba(0,0,0,0.4);
-        object-fit: cover;
-        z-index: 9999;
-    }
-    </style>
-    <img src="https://raw.githubusercontent.com/SahilMandli/quant-sentiment/refs/heads/main/Sahil.jpeg" class="fixed-profile-pic">
-    """,
-    unsafe_allow_html=True
-)
