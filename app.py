@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 import streamlit as st
 import plotly.graph_objects as go
 from textblob import TextBlob
@@ -183,13 +184,25 @@ if price is None:
     st.error(f"❌ No price data for {tkr}")
     st.stop()
 last = price.iloc[-1]
+@st.cache_data(ttl=3600)  # cache for 1 hour to reduce calls
+def load_fund(sym: str):
+    try:
+        ticker = yf.Ticker(sym)
+        info = ticker.get_info()  # same as .info, more explicit
+        return info
 
-@st.cache_data(ttl=86400)
-def load_fund(sym):
-    info = yf.Ticker(sym).info
-    return {"pe": info.get("trailingPE", np.nan),
-            "de": info.get("debtToEquity", np.nan),
-            "ev": info.get("enterpriseToEbitda", np.nan)}
+    except YFRateLimitError:
+        # Yahoo Finance is blocking too many requests
+        st.warning(
+            "Yahoo Finance is temporarily limiting data requests. "
+            "Please wait a few minutes and try again."
+        )
+        st.stop()  # stop the app nicely
+
+    except Exception as e:
+        # Any other error
+        st.error(f"Could not load data for {sym}. Error: {e}")
+        st.stop()
 
 fund = load_fund(tkr)
 
