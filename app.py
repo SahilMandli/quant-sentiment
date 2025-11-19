@@ -214,9 +214,18 @@ if show_rsi and not pd.isna(last['RSI']): tech += 1 if 40<last['RSI']<70 else -1
 if show_bb and not (pd.isna(last['BB_Upper']) or pd.isna(last['BB_Lower'])):
     tech += 0.5 if last['Adj Close']>last['BB_Upper'] else 0
     tech -= 0.5 if last['Adj Close']<last['BB_Lower'] else 0
-if show_pe and not pd.isna(fund['pe']): tech += 1.0 if fund['pe']<18 else -1.0
-if show_de and not pd.isna(fund['de']): tech += 0.5 if fund['de']<1 else -0.5
-if show_ev and not pd.isna(fund['ev']): tech += 1.0 if fund['ev']<12 else -1.0
+pe = fund.get('pe', np.nan) if isinstance(fund, dict) else np.nan
+if show_pe and not pd.isna(pe):
+    tech += 1.0 if pe < 18 else -1.0
+de = fund.get('de', np.nan) if isinstance(fund, dict) else np.nan
+if show_de and not pd.isna(de):
+    # your logic here, example:
+    tech += 1.0 if de < 1.5 else -1.0
+ev = fund.get('ev', np.nan) if isinstance(fund, dict) else np.nan
+if show_ev and not pd.isna(ev):
+    # your logic here
+    tech += 1.0 if ev < 10 else -1.0
+
 
 # ─── 4 | BLEND + VERDICT ───────────────────────────────────────────
 blend = tech_w/100*tech + sent_w/100*sent_val
