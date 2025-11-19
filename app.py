@@ -4,7 +4,6 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from yfinance.exceptions import YFRateLimitError
 import streamlit as st
 import plotly.graph_objects as go
 from textblob import TextBlob
@@ -14,6 +13,18 @@ import base64, textwrap
 
 # ─── CONFIG ────────────────────────────────────────────────────────
 TICKERS     = ["NVDA","AMD","ADBE","VRTX","SCHW","CROX","DE","FANG","TMUS","PLTR","GME"]
+FULLNAME = {
+    "NVDA": "NVIDIA",
+    "AMD": "Advanced Micro Devices",
+    "ADBE": "Adobe",
+    "VRTX": "Vertex Pharma",
+    "SCHW": "Charles Schwab",
+    "CROX": "Crocs",
+    "DE": "Deere & Co.",
+    "FANG": "Diamondback Energy",
+    "TMUS": "T-Mobile US",
+    "PLTR": "Palantir",
+}
 SUBS        = ["stocks","investing","wallstreetbets"]
 UA          = {"User-Agent":"Mozilla/5.0 (ValueTron/1.5)"}
 REFRESH_SEC = 3 * 3600       # refresh Reddit every 3 h
@@ -184,25 +195,13 @@ if price is None:
     st.error(f"❌ No price data for {tkr}")
     st.stop()
 last = price.iloc[-1]
-@st.cache_data(ttl=3600)  # cache for 1 hour to reduce calls
-def load_fund(sym: str):
-    try:
-        ticker = yf.Ticker(sym)
-        info = ticker.get_info()  # same as .info, more explicit
-        return info
 
-    except YFRateLimitError:
-        # Yahoo Finance is blocking too many requests
-        st.warning(
-            "Yahoo Finance is temporarily limiting data requests. "
-            "Please wait a few minutes and try again."
-        )
-        st.stop()  # stop the app nicely
-
-    except Exception as e:
-        # Any other error
-        st.error(f"Could not load data for {sym}. Error: {e}")
-        st.stop()
+@st.cache_data(ttl=86400)
+def load_fund(sym):
+    info = yf.Ticker(sym).info
+    return {"pe": info.get("trailingPE", np.nan),
+            "de": info.get("debtToEquity", np.nan),
+            "ev": info.get("enterpriseToEbitda", np.nan)}
 
 fund = load_fund(tkr)
 
@@ -214,18 +213,9 @@ if show_rsi and not pd.isna(last['RSI']): tech += 1 if 40<last['RSI']<70 else -1
 if show_bb and not (pd.isna(last['BB_Upper']) or pd.isna(last['BB_Lower'])):
     tech += 0.5 if last['Adj Close']>last['BB_Upper'] else 0
     tech -= 0.5 if last['Adj Close']<last['BB_Lower'] else 0
-pe = fund.get('pe', np.nan) if isinstance(fund, dict) else np.nan
-if show_pe and not pd.isna(pe):
-    tech += 1.0 if pe < 18 else -1.0
-de = fund.get('de', np.nan) if isinstance(fund, dict) else np.nan
-if show_de and not pd.isna(de):
-    # your logic here, example:
-    tech += 1.0 if de < 1.5 else -1.0
-ev = fund.get('ev', np.nan) if isinstance(fund, dict) else np.nan
-if show_ev and not pd.isna(ev):
-    # your logic here
-    tech += 1.0 if ev < 10 else -1.0
-
+if show_pe and not pd.isna(fund['pe']): tech += 1.0 if fund['pe']<18 else -1.0
+if show_de and not pd.isna(fund['de']): tech += 0.5 if fund['de']<1 else -0.5
+if show_ev and not pd.isna(fund['ev']): tech += 1.0 if fund['ev']<12 else -1.0
 
 # ─── 4 | BLEND + VERDICT ───────────────────────────────────────────
 blend = tech_w/100*tech + sent_w/100*sent_val
@@ -261,4 +251,40 @@ with tab_r:
     if posts_df.empty:
         st.info('No Reddit posts.')
     else:
-        st.dataframe(posts_df, hide_index=True, use_container_width=True)
+        st.dataframe(posts_df, hide_index=True, use_container_width=True) 
+        
+# ── Friendly explanation  ---------------------------------
+    explanation_parts = []
+
+    # Technical side
+    if tech > 0:
+        explanation_parts.append(
+            f"Technical indicators are net **bullish** *(+{tech:.1f})*."
+        )
+    elif tech < 0:
+        explanation_parts.append(
+            f"Technical indicators are net **bearish** *({tech:.1f})*."
+        )
+    else:
+        explanation_parts.append("Technical indicators are **neutral** *(0)*.")
+
+    # Sentiment side
+    if sent_val > 0.05:
+        explanation_parts.append(
+            f"Reddit sentiment is **positive** *(+{sent_val:.2f})*."
+        )
+    elif sent_val < -0.05:
+        explanation_parts.append(
+            f"Reddit sentiment is **negative** *({sent_val:.2f})*."
+        )
+    else:
+        explanation_parts.append("Reddit sentiment is **neutral**.")
+
+    # Blend comment
+    explanation_parts.append(
+        f"Blending **{tech_w}%** technical with **{sent_w}%** sentiment "
+        f"yields a combined score of **{blend:.2f}**, → **{ver}** signal."
+    )
+
+    # Render paragraph
+    st.markdown(" ".join(explanation_parts), unsafe_allow_html=True)
